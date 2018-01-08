@@ -9,113 +9,132 @@ type_synonym byte = "8 word"
 lemma "(256 :: byte) = 0" by simp
 
 
-datatype bf_cmd = BF_RIGHT  --">, increment the data pointer (to point to the next cell to the right)." 
-                | BF_LEFT  --"<, decrement the data pointer (to point to the next cell to the left)."
+datatype bf_cmd = BF_RIGHT --">, increment the data pointer (to point to the next cell to the right)." 
+                | BF_LEFT --"<, decrement the data pointer (to point to the next cell to the left)."
                 | BF_PLUS  --"+, increment the byte at the data pointer."
-                | BF_MINUS  --"-, decrement the byte at the data pointer."
-                | BF_OUTPUT  --"., output the byte at the data pointer."
-                | BF_INPUT  --",, accept one byte of input, storing its value in the byte at the data pointer."
-                | BF_LOOPSTART   --"[, while data pointer is not zero"
-                | BF_LOOPEND --"]"
+                | BF_MINUS --"-, decrement the byte at the data pointer."
+                | BF_OUTPUT --"., output the byte at the data pointer."
+                | BF_INPUT --",, accept one byte of input, storing its value in the byte at the data pointer."
+                | BF_LOOP bf_cmd  --"[ \<dots> ], while data pointer is not zero"
+                | BF_SEQ bf_cmd bf_cmd --"Doesn't esist in brainfuck, but makes defining a semantics so much easier,
+                  because lists are not required to compose programs"
+                | BF_NOOP --"dito"
+                  
+abbreviation c_RIGHT ("\<^bold>< _" ) where "c_RIGHT l \<equiv> BF_SEQ BF_RIGHT l"
+abbreviation c_LEFT ("\<^bold>> _") where "c_LEFT l \<equiv> BF_SEQ BF_LEFT l"
+abbreviation c_PLUS ("\<^bold>+ _") where "c_PLUS l \<equiv> BF_SEQ BF_PLUS l"
+abbreviation c_MINUS ("\<^bold>- _") where "c_MINUS l \<equiv> BF_SEQ BF_MINUS l"
+abbreviation c_OUTPUT ("\<^bold>. _") where "c_OUTPUT l \<equiv> BF_SEQ BF_OUTPUT l"
+abbreviation c_INPUT ("\<^bold>, _") where "c_INPUT l \<equiv> BF_SEQ BF_INPUT l"
+abbreviation c_LOOP ("\<^bold>[ _ \<^bold>] _") where "c_LOOP i l \<equiv> BF_SEQ (BF_LOOP i) l"
+abbreviation c_END ("\<box>") where "\<box> \<equiv> BF_NOOP"
 
 
+  
 datatype tape = Tape "byte list" byte    "byte list"
 --"                   left       current right"
 --" left is ordered in reverse"
 --"tape is (rev left)@[current]@right"
-
+definition "initial_tape \<equiv> Tape [] 0 []"
 
 datatype outp = Outp "byte list"
 datatype inp = Inp "byte list"
-datatype state = Error | Normal tape inp outp
+datatype state = Normal tape inp outp
+definition "initial_state inp \<equiv> Normal initial_tape (Inp inp) (Outp [])"
+definition "s_tape state \<equiv> (case state of Normal tape _ _ \<Rightarrow> case tape of Tape l c r \<Rightarrow> c)"
+lemmas initial_state_def[simp] initial_tape_def[simp] s_tape_def[simp]
 
-(*not sure if this syntax annotation awakens daemons*)
-datatype tape_visual = B byte ("_\<^sub>b\<^isub>y\<^isub>t\<^isub>e")| XR ("\<longrightarrow>\<^isub>p\<^isub>c")| XL ("\<longleftarrow>\<^isub>p\<^isub>c")
+inductive eval_bf :: "bf_cmd \<Rightarrow> state \<Rightarrow> state \<Rightarrow> bool"  where
+init:  "s = s' \<Longrightarrow> eval_bf BF_NOOP s s'" |
+ "eval_bf BF_RIGHT (Normal (Tape lt c []) inp outp)       (Normal (Tape (c#lt) 0 []) inp outp)" |
+ "eval_bf BF_RIGHT (Normal (Tape lt c (rt#rts)) inp outp) (Normal (Tape (c#lt) rt rts) inp outp)" |
+ "eval_bf BF_LEFT  (Normal (Tape [] c rt) inp outp)       (Normal (Tape [] 0 (c#rt)) inp outp)"  | (* debatable, but definitely less annoying than some error state *)
+ "eval_bf BF_LEFT  (Normal (Tape (lt#lts) c rt) inp outp) (Normal (Tape lts lt (c#rt)) inp outp)" |
+ "eval_bf BF_PLUS  (Normal (Tape lt c rt) inp outp)       (Normal (Tape lt (c + 1) rt) inp outp)" |
+ "eval_bf BF_MINUS (Normal (Tape lt c rt) inp outp)       (Normal (Tape lt (c - 1) rt) inp outp)" |
+ "eval_bf BF_OUTPUT (Normal (Tape lt c rt) inp (Outp outp))     (Normal (Tape lt c rt) inp (Outp (c#outp)))" |
+ "eval_bf BF_INPUT  (Normal (Tape lt _ rt) (Inp []) outp)       (Normal (Tape lt 0 rt) (Inp []) outp)" |
+ "eval_bf BF_INPUT  (Normal (Tape lt _ rt) (Inp (i#is)) outp)   (Normal (Tape lt i rt) (Inp is) outp)" |
+seq:   "eval_bf code s s' \<Longrightarrow> eval_bf code' s' s'' \<Longrightarrow> eval_bf (BF_SEQ code code') s s''" | (* bigstep *)
+whileTrue:  "c \<noteq> 0 \<Longrightarrow> eval_bf code (Normal (Tape lt c rt) inp outp) s\<^sub>1 \<Longrightarrow> eval_bf (BF_LOOP code)  s\<^sub>1 s\<^sub>2 \<Longrightarrow>
+              eval_bf (BF_LOOP code)  (Normal (Tape lt c rt) inp outp) s\<^sub>2" |
+whileFalse: "eval_bf (BF_LOOP code) (Normal (Tape lt 0 rt) inp outp) (Normal (Tape lt 0 rt) inp outp)"
 
-fun print_state :: "state \<Rightarrow> (tape_visual list \<times> byte list \<times> byte list) option" where
-  "print_state Error = None" |
-  "print_state (Normal (Tape lt c rt) (Inp inp) (Outp outp)) = Some ((map B (rev lt))@[XR]@[B c]@[XL]@(map B rt), inp, rev outp)"
+(* Note that it is very elegant to roll with something like
+type_synonym tape = "int \<Rightarrow> byte"
+definition "initial_tape :: tape \<equiv> \<lambda>_. 0" -- "Current cell is always tape 0"
+ "eval_bf BF_RIGHT  (Normal tape inp outp)          (Normal (\<lambda>c. tape (c - 1)) inp outp)" |
+ "eval_bf BF_LEFT   (Normal tape inp outp)          (Normal (\<lambda>c. tape (c + 1)) inp outp)"  |
+ "eval_bf BF_PLUS   (Normal tape inp outp)          (Normal (tape(0 := tape 0 + 1)) inp outp)" |
+ "eval_bf BF_MINUS  (Normal tape inp outp)          (Normal (tape(0 := tape 0 - 1)) inp outp)" |
+it is also too inefficient
+(Peter would probably automatically refine me for this statement) *)
 
+lemmas eval_bf.intros(1-11,13)[intro!]
 
-inductive eval_bf :: "bf_cmd list \<Rightarrow> state \<Rightarrow> state \<Rightarrow> bool"  where
-init:  "s = s' \<Longrightarrow> eval_bf [] s s'" |
-       "eval_bf [BF_RIGHT] (Normal (Tape lt c []) inp outp)       (Normal (Tape (c#lt) 0 []) inp outp)" |
-       "eval_bf [BF_RIGHT] (Normal (Tape lt c (rt#rts)) inp outp) (Normal (Tape (c#lt) rt rts) inp outp)" |
-       "eval_bf [BF_LEFT]  (Normal (Tape [] c rt) inp outp)       Error"  |
-       "eval_bf [BF_LEFT]  (Normal (Tape (lt#lts) c rt) inp outp) (Normal (Tape lts lt (c#rt)) inp outp)" |
-       "eval_bf [BF_PLUS]  (Normal (Tape lt c rt) inp outp)       (Normal (Tape lt (c + 1) rt) inp outp)" |
-       "eval_bf [BF_MINUS] (Normal (Tape lt c rt) inp outp)       (Normal (Tape lt (c - 1) rt) inp outp)" |
-       "eval_bf [BF_OUTPUT] (Normal (Tape lt c rt) inp (Outp outp))     (Normal (Tape lt c rt) inp (Outp (c#outp)))" |
-       "eval_bf [BF_INPUT]  (Normal (Tape lt _ rt) (Inp []) outp)       (Normal (Tape lt 0 rt) (Inp []) outp)" |
-       "eval_bf [BF_INPUT]  (Normal (Tape lt _ rt) (Inp (i#is)) outp)   (Normal (Tape lt i rt) (Inp is) outp)" |
-seq:  "eval_bf code s s' \<Longrightarrow> eval_bf code' s' s'' \<Longrightarrow> eval_bf (code@code') s s''" |
-whileTrue:      "c \<noteq> 0 \<Longrightarrow> eval_bf code (Normal (Tape lt c rt) inp outp) (Normal (Tape lt'' c'' rt'') inp'' outp'') \<Longrightarrow>
-                  eval_bf ([BF_LOOPSTART]@code@[BF_LOOPEND])  (Normal (Tape lt'' c'' rt'') inp'' outp') (Normal (Tape lt' c' rt') inp' outp') \<Longrightarrow>
-        eval_bf ([BF_LOOPSTART]@code@[BF_LOOPEND])  (Normal (Tape lt c rt) inp outp)       (Normal (Tape lt' c' rt') inp' outp')" |
-whileFalse:      "c = 0 \<Longrightarrow> 
-        eval_bf ([BF_LOOPSTART]@code@[BF_LOOPEND])  (Normal (Tape lt c rt) inp outp)       (Normal (Tape lt c rt) inp outp)" 
+code_pred (modes: i => i => o => bool as compute_bf) eval_bf .
+    
+lemma noope[simp,dest]: "eval_bf \<box> s t \<Longrightarrow> s = t"
+  by(cases "\<box>" s t rule: eval_bf.cases)
+    
+lemma seq_eq: "eval_bf (BF_SEQ c d) s t = (\<exists>i. eval_bf c s i \<and> eval_bf d i t)"
+  apply(rule iffI)
+  subgoal
+    apply(cases "(BF_SEQ c d)" s t rule: eval_bf.cases; assumption?)
+    apply blast
+    done
+  subgoal
+    apply(elim exE conjE)
+    apply(rule seq)
+     apply(assumption)+
+    done
+  done
+    
 
+lemma unbox[simp]: 
+  "eval_bf (BF_SEQ c \<box>) s t = eval_bf c s t" 
+  "eval_bf (BF_SEQ \<box> c) s t = eval_bf c s t"
+  by(auto simp add: seq_eq)
 
-inductive_cases b_bf_init: "eval_bf [] s s'"
-thm b_bf_init
-inductive_cases b_bf_while: "eval_bf (BF_LOOPSTART # code @ [BF_LOOPEND]) s s'"
-thm b_bf_while
+    
+lemma seq_while_split: "eval_bf (\<^bold>[ c \<^bold>] \<box>) s si \<Longrightarrow> eval_bf (c') si s'
+   \<Longrightarrow> eval_bf (\<^bold>[ c \<^bold>] c') s s'"
+  by (simp add: seq)
 
-lemma subst1: "cmd#code' = [cmd]@code'" by (metis append_Cons append_Nil)
+lemma "eval_bf (\<^bold>+\<^bold>.\<box>) (initial_state inp) (Normal (Tape [] 1 []) (Inp inp) (Outp [1]))"
+  by auto
 
-lemma seq': "eval_bf [cmd] s s' \<Longrightarrow> eval_bf code' s' s'' \<Longrightarrow> eval_bf (cmd#code') s s''"
-apply(subst subst1)
-apply(rule eval_bf.seq)
-by(auto)
-
-lemma seq_while_split: "eval_bf ([BF_LOOPSTART]@code@[BF_LOOPEND]) s si \<Longrightarrow> eval_bf (code') si s'
-   \<Longrightarrow> eval_bf ([BF_LOOPSTART]@code@[BF_LOOPEND]@code') s s'"
-  apply(simp)
-  apply(rule eval_bf.seq[of "[BF_LOOPSTART]@code@[BF_LOOPEND]" s si "code'", simplified])
-by(auto intro: eval_bf.intros)
-
-
-lemma "eval_bf [] (Normal (Tape [] 0 []) inp outp) (Normal (Tape [] 0 []) inp outp)"
-  by(simp add: eval_bf.intros)
-
-lemma "eval_bf [BF_PLUS, BF_OUTPUT] (Normal (Tape [] 0 []) inp (Outp [])) (Normal (Tape [] 1 []) inp (Outp [1]))"
-  apply(rule seq')
-  apply(auto intro: eval_bf.intros)
- done
-
-code_pred eval_bf .
-thm eval_bf.equation (*empty??*)
-thm eval_bf_def
-
-definition bf_hello_world :: "bf_cmd list" where
-  "bf_hello_world \<equiv> 
-BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_LOOPSTART#BF_RIGHT#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_RIGHT#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_RIGHT#BF_PLUS#BF_PLUS#BF_PLUS#BF_RIGHT#BF_PLUS#BF_LEFT#BF_LEFT#BF_LEFT#BF_LEFT#BF_MINUS#BF_LOOPEND#BF_RIGHT#BF_PLUS#BF_PLUS#BF_OUTPUT#BF_RIGHT#BF_PLUS#BF_OUTPUT#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_OUTPUT#BF_OUTPUT#BF_PLUS#BF_PLUS#BF_PLUS#BF_OUTPUT#BF_RIGHT#BF_PLUS#BF_PLUS#BF_OUTPUT#BF_LEFT#BF_LEFT#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_PLUS#BF_OUTPUT#BF_RIGHT#BF_OUTPUT#BF_PLUS#BF_PLUS#BF_PLUS#BF_OUTPUT#BF_MINUS#BF_MINUS#BF_MINUS#BF_MINUS#BF_MINUS#BF_MINUS#BF_OUTPUT#BF_MINUS#BF_MINUS#BF_MINUS#BF_MINUS#BF_MINUS#BF_MINUS#BF_MINUS#BF_MINUS#BF_OUTPUT#BF_RIGHT#BF_PLUS#BF_OUTPUT#BF_RIGHT#[]
- "
+value "bf_hello_world"
+definition "bf_hello_world \<equiv>  \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+
+\<^bold>[ \<^bold>< \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>< \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>< \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>< \<^bold>+ \<^bold>> \<^bold>> \<^bold>> \<^bold>> \<^bold>- \<box> \<^bold>] 
+\<^bold>< \<^bold>+ \<^bold>+ \<^bold>.
+\<^bold>< \<^bold>+ \<^bold>.
+\<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+
+\<^bold>.
+\<^bold>.
+\<^bold>+ \<^bold>+ \<^bold>+ \<^bold>.
+\<^bold>< \<^bold>+ \<^bold>+ \<^bold>.
+\<^bold>> \<^bold>> \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>+ \<^bold>.
+\<^bold>< \<^bold>.
+\<^bold>+ \<^bold>+ \<^bold>+ \<^bold>.
+\<^bold>- \<^bold>- \<^bold>- \<^bold>- \<^bold>- \<^bold>- \<^bold>. \<^bold>- \<^bold>- \<^bold>- \<^bold>- \<^bold>- \<^bold>- \<^bold>- \<^bold>- \<^bold>.
+\<^bold>< \<^bold>+ \<^bold>. \<^bold>< 
+\<box>"
 
 definition hello_world_ascii :: "byte list" where
   "hello_world_ascii \<equiv> [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100, 33]"
 
-(*why u no work??*)
-values "{zs. eval_bf bf_hello_world (Normal (Tape [] 0 []) (Inp []) (Outp [])) zs}"
+  find_theorems compute_bf
+values "{zs. eval_bf bf_hello_world (initial_state []) zs}"
+value "co mpute_bf bf_hello_world (initial_state [])" (* why won't you work. :( *)
+export_code compute_bf checking Haskell
 
 lemma hello_world: "eval_bf bf_hello_world 
-    (Normal (Tape [] 0 []) (Inp []) (Outp [])) 
+    (initial_state [])
     (Normal (Tape [33, 100, 87, 0] 10 []) (Inp []) (Outp (rev hello_world_ascii)))"
-apply(simp add: hello_world_ascii_def bf_hello_world_def)
-  apply(rule seq')
-  apply(auto intro: eval_bf.intros)
-  apply(rule seq', auto intro: eval_bf.intros)+
-  apply(rule seq_while_split[of "[BF_RIGHT, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_RIGHT, BF_PLUS, BF_PLUS, BF_PLUS,
-             BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_RIGHT, BF_PLUS, BF_PLUS, BF_PLUS, BF_RIGHT, BF_PLUS, BF_LEFT,
-             BF_LEFT, BF_LEFT, BF_LEFT, BF_MINUS]", simplified])
-  apply((rule eval_bf.whileTrue[of _ "[BF_RIGHT, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_RIGHT, BF_PLUS, BF_PLUS, BF_PLUS,
-             BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_RIGHT, BF_PLUS, BF_PLUS, BF_PLUS, BF_RIGHT, BF_PLUS, BF_LEFT,
-             BF_LEFT, BF_LEFT, BF_LEFT, BF_MINUS]", simplified], simp),
-        (rule seq', auto intro: eval_bf.intros)+)+
-  apply(rule eval_bf.whileFalse[of _ "[BF_RIGHT, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_RIGHT, BF_PLUS, BF_PLUS, BF_PLUS,
-             BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_PLUS, BF_RIGHT, BF_PLUS, BF_PLUS, BF_PLUS, BF_RIGHT, BF_PLUS, BF_LEFT,
-             BF_LEFT, BF_LEFT, BF_LEFT, BF_MINUS]", simplified], simp)
-  apply(rule seq', auto intro: eval_bf.intros)+
-  done
+  apply(simp add: hello_world_ascii_def bf_hello_world_def)
+  apply auto
+  apply(rule whileTrue, (simp; fail), auto)+
+done
 
 end
