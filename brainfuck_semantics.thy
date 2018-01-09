@@ -125,9 +125,10 @@ definition hello_world_ascii :: "byte list" where
   "hello_world_ascii \<equiv> [72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100, 33]"
 
   find_theorems compute_bf
-values "{zs. eval_bf bf_hello_world (initial_state []) zs}"
-value "co mpute_bf bf_hello_world (initial_state [])" (* why won't you work. :( *)
-export_code compute_bf checking Haskell
+  values "{zs. eval_bf bf_hello_world (initial_state []) zs}"
+    
+value "Predicate.the (compute_bf bf_hello_world (initial_state []))" (* 50 secs *)
+export_code compute_bf Predicate.the checking Haskell
 
 lemma hello_world: "eval_bf bf_hello_world 
     (initial_state [])
